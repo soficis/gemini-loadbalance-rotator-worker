@@ -1,7 +1,7 @@
 import { Hono } from "hono";
-import { Env, ChatCompletionRequest, ChatCompletionResponse } from "../types";
+import { Env, ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ToolCall } from "../types";
 import { geminiCliModels, DEFAULT_MODEL, getAllModelIds } from "../models";
-import { OPENAI_MODEL_OWNER, CODE_ASSIST_ENDPOINT, CODE_ASSIST_API_VERSION } from "../config";
+import { OPENAI_MODEL_OWNER } from "../config";
 import { DEFAULT_THINKING_BUDGET } from "../constants";
 // REMOVED: import { AuthManager } from "../auth";
 // REMOVED: import { GeminiApiClient } from "../gemini-client";
@@ -154,8 +154,10 @@ OpenAIRoute.post("/chat/completions", async (c) => {
 		// Optionally initialize KeyManager/KeyRotator if GEMINI_KEYS or GEMINI_KEYS_FILE is provided
 		let keyRotator: KeyRotator | null = null;
 		try {
-			const envKeys = c.env.GEMINI_KEYS as string | undefined;
-			const keysFile = c.env.GEMINI_KEYS_FILE as string | undefined;
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const envKeys = (c.env as any).GEMINI_KEYS as string | undefined;
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const keysFile = (c.env as any).GEMINI_KEYS_FILE as string | undefined;
 			if (envKeys || keysFile) {
 				const km = new KeyManager({ kv: c.env.GEMINI_CLI_LOADBALANCE, kvKey: "gemini_key_rotator:cooldown_data_v1" });
 				if (envKeys) {
@@ -167,7 +169,7 @@ OpenAIRoute.post("/chat/completions", async (c) => {
 					await km.loadKeysFromFile(keysFile);
 				}
 				keyRotator = new KeyRotator(km);
-				console.log("Initialized KeyRotator with", (km as any).keys?.length ?? km.getTotalKeysCount(), "keys");
+				console.log("Initialized KeyRotator with", km.getTotalKeysCount(), "keys");
 			}
 		} catch (krErr) {
 			console.error("Failed to initialize KeyRotator:", krErr);
@@ -200,7 +202,7 @@ OpenAIRoute.post("/chat/completions", async (c) => {
 								// Delegate to a pool client to perform the request using the raw apiKey
 								// Note: getNextClient() is safe because the pool is initialized above.
 								// We bind the call so it returns the AsyncGenerator expected by KeyRotator.
-								geminiClient.streamContentWithApiKey(apiKey, _model, _systemPrompt as string, _messages as any[], _options),
+								geminiClient.streamContentWithApiKey(apiKey, _model, _systemPrompt as string, _messages as ChatMessage[], _options),
 							{
 								includeReasoning,
 								thinkingBudget,
@@ -268,7 +270,7 @@ OpenAIRoute.post("/chat/completions", async (c) => {
 					) => {
 						// Use the raw API key path on the Gemini client so KeyRotator can rotate across keys.
 						// This calls the client method that accepts a raw apiKey and performs the network request.
-						return await geminiClient.getCompletionWithApiKey(apiKey, _model, _systemPrompt as string, _messages as any[], _options as any);
+						return await geminiClient.getCompletionWithApiKey(apiKey, _model, _systemPrompt as string, _messages as ChatMessage[], _options);
 					};
 	
 					completion = await keyRotator.generateContent(model, systemPrompt, otherMessages, providerCall, {
@@ -299,7 +301,7 @@ OpenAIRoute.post("/chat/completions", async (c) => {
 							message: {
 								role: "assistant",
 								content: completion.content,
-								tool_calls: completion.tool_calls
+								tool_calls: completion.tool_calls as ToolCall[] | undefined
 							},
 							finish_reason: completion.tool_calls && completion.tool_calls.length > 0 ? "tool_calls" : "stop"
 						}

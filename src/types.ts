@@ -8,7 +8,6 @@ export type SafetyThreshold =
 
 // --- Environment Variable Typings ---
 export interface Env {
-	[key: string]: any; // Allow any string key for environment variables
 	GEMINI_PROJECT_ID?: string;
 	GEMINI_CLI_LOADBALANCE: KVNamespace; // Cloudflare KV for token caching
 	OPENAI_API_KEY?: string; // Optional API key for authentication

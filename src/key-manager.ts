@@ -11,7 +11,7 @@ export interface KeyExhaustionRecord {
 export interface KeyManagerOptions {
   keys?: string[]; // explicit keys list
   tierCooldownSeconds?: number; // default cooldown for exhausted keys
-  kv?: any; // optional Cloudflare KVNamespace (typed as any for compatibility)
+  kv?: KVNamespace; // optional Cloudflare KVNamespace
   kvKey?: string; // optional key name in KV
 }
 
@@ -19,7 +19,7 @@ export class KeyManager {
   private keys: string[] = [];
   private keyStatus: Record<string, KeyExhaustionRecord> = {};
   private tierCooldownMs: number;
-  private kv?: any;
+  private kv?: KVNamespace;
   private kvKey: string;
 
   constructor(options: KeyManagerOptions = {}) {
@@ -66,7 +66,7 @@ export class KeyManager {
       } else {
         // Try Node fs - dynamic import to avoid bundling in Worker environments
         try {
-          // eslint-disable-next-line @typescript-eslint/no-var-requires
+           
           const fs = await import("fs");
           content = fs.readFileSync(pathOrUrl, "utf8");
         } catch (fsErr) {
@@ -172,7 +172,7 @@ export class KeyManager {
         await this.kv.put(this.kvKey, JSON.stringify(payload));
       } catch (err) {
         // best-effort
-        // eslint-disable-next-line no-console
+         
         console.error("KeyManager.saveState KV error:", err);
       }
     }
@@ -183,7 +183,7 @@ export class KeyManager {
     try {
       const raw = await this.kv.get(this.kvKey);
       if (!raw) return;
-      const parsed = typeof raw === "string" ? JSON.parse(raw) : JSON.parse(await raw.text());
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
       if (parsed.keys && parsed.keys.length > 0) {
         this.keys = Array.from(new Set([...this.keys, ...parsed.keys]));
       }
@@ -193,7 +193,7 @@ export class KeyManager {
         }
       }
     } catch (err) {
-      // eslint-disable-next-line no-console
+       
       console.error("KeyManager.loadState KV error:", err);
     }
   }

@@ -21,12 +21,12 @@ export interface KeyUsageSummary {
 }
 
 export class UsageTracker {
-  private kv?: any;
+  private kv?: KVNamespace;
   private kvKey: string;
   private retentionMs: number;
   private usage: UsageRecord[] = [];
 
-  constructor(options?: { kv?: any; kvKey?: string; retentionDays?: number }) {
+  constructor(options?: { kv?: KVNamespace; kvKey?: string; retentionDays?: number }) {
     this.kv = options?.kv;
     this.kvKey = options?.kvKey ?? "gemini_key_rotator:usage_data_v1";
     this.retentionMs = (options?.retentionDays ?? 30) * 24 * 60 * 60 * 1000;
@@ -65,7 +65,7 @@ export class UsageTracker {
         this.usage = [];
         return;
       }
-      const parsed = typeof raw === "string" ? JSON.parse(raw) : JSON.parse(await raw.text());
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
       if (Array.isArray(parsed)) {
         this.usage = parsed as UsageRecord[];
       } else {
@@ -76,7 +76,7 @@ export class UsageTracker {
       this.usage = this.usage.filter((u) => typeof u.timestamp === "number" && u.timestamp >= cutoff);
     } catch (err) {
       // best-effort
-      // eslint-disable-next-line no-console
+       
       console.error("UsageTracker.load KV error:", err);
       this.usage = [];
     }
@@ -90,7 +90,7 @@ export class UsageTracker {
         await this.kv.put(this.kvKey, JSON.stringify(this.usage));
       }
     } catch (err) {
-      // eslint-disable-next-line no-console
+       
       console.error("UsageTracker.save KV error:", err);
     }
   }

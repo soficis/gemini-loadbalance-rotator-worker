@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-unused-vars */
 /**
  * Minimal ambient declarations to cover Cloudflare Worker and Node hybrid runtime
  * used by this project. These are intentionally permissive (use `any`) to avoid
@@ -11,11 +13,11 @@ declare interface KVNamespace {
   delete?(key: string): Promise<void>;
 }
 
-declare var GLOBAL: any;
-declare var globalThis: any;
+declare let GLOBAL: any;
+declare let globalThis: any;
 
 /** crypto */
-declare var crypto: {
+declare let crypto: {
   randomUUID(): string;
   getRandomValues?(buf: Uint8Array): Uint8Array;
   subtle?: any;
@@ -28,7 +30,7 @@ declare function setInterval(fn: (...args: any[]) => void, ms?: number, ...args:
 declare function clearInterval(id?: number): void;
 
 /** Console */
-declare var console: {
+declare let console: {
   log: (...args: any[]) => void;
   error: (...args: any[]) => void;
   warn: (...args: any[]) => void;
@@ -118,10 +120,10 @@ declare class FormData {
 }
 
 /** Other globals */
-declare var process: any;
-declare var module: any;
-declare var require: any;
-declare var __dirname: string;
-declare var __filename: string;
+declare let process: any;
+declare let module: any;
+declare let require: any;
+declare let __dirname: string;
+declare let __filename: string;
 
 export {};

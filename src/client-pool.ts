@@ -1,4 +1,4 @@
-import { Env, ClientStatus } from "./types";
+import { Env, ClientStatus, OAuth2Credentials } from "./types";
 import { AuthManager } from "./auth";
 import { GeminiApiClient } from "./gemini-client";
 
@@ -16,11 +16,12 @@ export async function initializeClientPool(env: Env): Promise<void> {
 	}
 
 	const prefix = "GEMINI_API_KEY_";
-	const credentialsArray: any[] = [];
+	const credentialsArray: OAuth2Credentials[] = [];
 
 	for (const key in env) {
 		if (key.startsWith(prefix)) {
-			const credentialJson = env[key];
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const credentialJson = (env as any)[key];
 			if (typeof credentialJson === 'string') {
 				try {
 					credentialsArray.push(JSON.parse(credentialJson));
@@ -35,7 +36,7 @@ export async function initializeClientPool(env: Env): Promise<void> {
 		throw new Error(`No environment variables with prefix \`${prefix}\` found. Please store your Gemini API keys as environment variables.`);
 	}
 
-	clients = credentialsArray.map((creds: any, index: number) => {
+	clients = credentialsArray.map((creds: OAuth2Credentials, index: number) => {
 		const credentialJson = JSON.stringify(creds);
 		const authManager = new AuthManager(env, credentialJson, index);
 		const projectId = creds.project_id;

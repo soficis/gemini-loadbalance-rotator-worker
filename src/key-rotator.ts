@@ -2,13 +2,13 @@ import { KeyManager } from "./key-manager";
 
 // Flexible options bag accepted by provider calls
 export interface GenerateOptions {
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export type ProviderCallResult = {
   content: string;
   usage?: { inputTokens?: number; outputTokens?: number } | undefined;
-  tool_calls?: Array<any> | undefined;
+  tool_calls?: unknown[] | undefined;
 };
 
 export type ProviderCall = (
@@ -16,7 +16,7 @@ export type ProviderCall = (
   model: string,
   systemPrompt: string,
   messages: unknown[],
-  options?: any
+  options?: Record<string, unknown>
 ) => Promise<ProviderCallResult>;
 
 export interface KeyRotatorOptions {
@@ -39,12 +39,12 @@ export class KeyRotator {
 
   private async wait(ms: number): Promise<void> {
     // Use a cast to avoid lib typing differences between Node and Workers
-    return new Promise((res) => (setTimeout as any)(res, ms));
+    return new Promise((res) => (setTimeout as unknown as (callback: () => void, ms: number) => void)(res, ms));
   }
 
   private isRecoverableError(err: unknown): boolean {
     if (!err) return false;
-    const e = err as any;
+    const e = err as { message?: unknown; status?: unknown; statusCode?: unknown; code?: unknown };
     const msg = (e && e.message) ? String(e.message).toLowerCase() : "";
     const status = e && (e.status || e.statusCode || e.code);
     if (status === 429 || status === 403) return true;
@@ -86,6 +86,18 @@ export class KeyRotator {
           const result = await providerCall(key, currentModel, systemPrompt, messages, options);
           return result;
         } catch (err) {
+          // Normalize possible status from common error shapes and fallback to message parsing
+          const e = err as { status?: unknown; response?: { status?: unknown }; statusCode?: unknown; code?: unknown; message?: unknown; toString?: () => string };
+          const status = (e && (e.status || (e.response && e.response.status) || e.statusCode || e.code)) || (e && /524/.test(String((e && (e.message || e.toString?.())) || '')) ? 524 : undefined);
+
+          // Handle Cloudflare / upstream timeout (524) as recoverable: mark key exhausted and try next key/model
+          if (status === 524) {
+            console.warn(`Key ${this.keyManager.maskKey(key)} produced 524 for ${currentModel}, marking exhausted and retrying with next key/model.`);
+            await this.keyManager.markKeyExhausted(key, currentModel, this.perKeyCooldownSeconds);
+            await this.wait(100 + Math.floor(Math.random() * 200));
+            continue;
+          }
+
           if (this.isRecoverableError(err)) {
             console.log(`Key ${this.keyManager.maskKey(key)} failed for model ${currentModel}, marking as exhausted.`);
             await this.keyManager.markKeyExhausted(key, currentModel, this.perKeyCooldownSeconds);
@@ -110,10 +122,10 @@ export class KeyRotator {
       model: string,
       systemPrompt: string,
       messages: unknown[],
-      options?: any
-    ) => AsyncGenerator<any>,
+      options?: Record<string, unknown>
+    ) => AsyncGenerator<unknown>,
     options?: GenerateOptions
-  ): AsyncGenerator<any> {
+  ): AsyncGenerator<unknown> {
     const startTier = MODEL_TIERS.indexOf(model) !== -1 ? MODEL_TIERS.indexOf(model) : 0;
 
   for (let i = startTier; i < MODEL_TIERS.length; i++) {
@@ -139,6 +151,17 @@ export class KeyRotator {
         }
         return;
       } catch (err) {
+        // Normalize status and check for upstream timeout (524)
+        const e = err as { status?: unknown; response?: { status?: unknown }; statusCode?: unknown; code?: unknown; message?: unknown; toString?: () => string };
+        const status = (e && (e.status || (e.response && e.response.status) || e.statusCode || e.code)) || (e && /524/.test(String((e && (e.message || e.toString?.())) || '')) ? 524 : undefined);
+
+        if (status === 524) {
+          console.warn(`Key ${this.keyManager.maskKey(key)} produced 524 for ${currentModel} (stream), marking exhausted and retrying with next key/model.`);
+          await this.keyManager.markKeyExhausted(key, currentModel, this.perKeyCooldownSeconds);
+          await this.wait(100 + Math.floor(Math.random() * 200));
+          continue;
+        }
+
         if (this.isRecoverableError(err)) {
           console.log(`Key ${this.keyManager.maskKey(key)} failed for model ${currentModel} (stream), marking as exhausted.`);
           await this.keyManager.markKeyExhausted(key, currentModel, this.perKeyCooldownSeconds);

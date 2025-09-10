@@ -8,7 +8,7 @@ const mkdir = promisify(fs.mkdir);
 const exists = (p: string) => fs.existsSync(p);
 
 export interface JsonLoadOptions {
-  defaultValue?: any;
+  defaultValue?: unknown;
 }
 
 export async function ensureDirForFile(filePath: string): Promise<void> {
@@ -30,7 +30,7 @@ export async function saveJsonAtomic(filePath: string, data: unknown): Promise<v
   }
 }
 
-export async function loadJson(filePath: string, opts: JsonLoadOptions = {}): Promise<any> {
+export async function loadJson(filePath: string, opts: JsonLoadOptions = {}): Promise<unknown> {
   try {
     if (!exists(filePath)) {
       return opts.defaultValue ?? null;
@@ -47,15 +47,16 @@ export async function loadJson(filePath: string, opts: JsonLoadOptions = {}): Pr
  * Remove entries with exhaustedUntil older than now (cleanup stale cooldowns)
  * Expects object shape: { [key: string]: { exhaustedUntil?: number, ... } }
  */
-export function cleanupExpiredCooldowns(obj: Record<string, any>, now: number = Date.now()): Record<string, any> {
-  const result: Record<string, any> = {};
+export function cleanupExpiredCooldowns(obj: Record<string, unknown>, now: number = Date.now()): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj || {})) {
     if (!v || typeof v !== "object") continue;
-    if (!v.exhaustedUntil) {
+    const value = v as { exhaustedUntil?: unknown };
+    if (!value.exhaustedUntil) {
       result[k] = v;
       continue;
     }
-    if (typeof v.exhaustedUntil === "number" && v.exhaustedUntil > now) {
+    if (typeof value.exhaustedUntil === "number" && value.exhaustedUntil > now) {
       result[k] = v;
     }
     // otherwise skip expired entry
@@ -67,10 +68,14 @@ export function cleanupExpiredCooldowns(obj: Record<string, any>, now: number = 
  * Prune usage entries older than retentionMs.
  * Expects array of usage objects with a 'timestamp' (ms) property.
  */
-export function pruneOldUsage(usageArray: Array<any>, retentionMs: number): Array<any> {
+export function pruneOldUsage(usageArray: unknown[], retentionMs: number): unknown[] {
   if (!Array.isArray(usageArray)) return [];
   const cutoff = Date.now() - retentionMs;
-  return usageArray.filter((u) => typeof u?.timestamp === "number" && u.timestamp >= cutoff);
+  return usageArray.filter((u) => {
+    if (!u || typeof u !== "object") return false;
+    const item = u as { timestamp?: unknown };
+    return typeof item.timestamp === "number" && item.timestamp >= cutoff;
+  });
 }
 
 /**
