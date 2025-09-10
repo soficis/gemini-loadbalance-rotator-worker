@@ -1,29 +1,29 @@
 ### Test the /v1/models endpoint
-GET https://gemini-cli-worker.gewoonjaap.workers.dev/v1/models
+GET https://gemini-loadbalance-rotator-worker.your-domain.workers.dev/v1/models
 Content-Type: application/json
 
 ###
 
 ### Check KV cache status
-GET https://gemini-cli-worker.gewoonjaap.workers.dev/v1/debug/cache
+GET https://gemini-loadbalance-rotator-worker.your-domain.workers.dev/v1/debug/cache
 Content-Type: application/json
 
 ###
 
 ### Test token authentication only
-POST https://gemini-cli-worker.gewoonjaap.workers.dev/v1/token-test
+POST https://gemini-loadbalance-rotator-worker.your-domain.workers.dev/v1/token-test
 Content-Type: application/json
 
 ###
 
 ### Test authentication and basic functionality
-POST https://gemini-cli-worker.gewoonjaap.workers.dev/v1/test
+POST https://gemini-loadbalance-rotator-worker.your-domain.workers.dev/v1/test
 Content-Type: application/json
 
 ###
 
 ### Test chat completions with gemini-2.5-flash (simple message)
-POST https://gemini-cli-worker.gewoonjaap.workers.dev/v1/chat/completions
+POST https://gemini-loadbalance-rotator-worker.your-domain.workers.dev/v1/chat/completions
 Content-Type: application/json
 
 {

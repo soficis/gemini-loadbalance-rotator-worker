@@ -156,7 +156,10 @@ export class GeminiApiClient {
 	 * Parses a server-sent event (SSE) stream from the Gemini API.
 	 */
 	private async *parseSSEStream(stream: ReadableStream<Uint8Array>): AsyncGenerator<GeminiResponse> {
-		const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
+		// TextDecoderStream in some TypeScript libdom typings has a Writable type
+		// that doesn't match the ReadableStream pipeThrough generic expectation.
+		// Cast to any here to satisfy the compiler while preserving runtime behavior.
+		const reader = stream.pipeThrough(new TextDecoderStream() as unknown as TransformStream<Uint8Array, string>).getReader();
 		let buffer = "";
 		let objectBuffer = "";
 
@@ -542,6 +545,10 @@ export class GeminiApiClient {
 			}
 
 			// Handle rate limiting with auto model switching
+			// Coerce originalModel to a string for logging to satisfy TypeScript when it may be undefined
+			const fallbackForLog = this.autoSwitchHelper.getFallbackModel(originalModel ?? "");
+			console.log(`[DEBUG] performStreamRequest - status: ${response.status}, isRetry: ${isRetry}, originalModel: ${originalModel}, isEnabled: ${this.autoSwitchHelper.isEnabled()}, fallbackModel: ${fallbackForLog}`);
+			console.log(`[DEBUG] performStreamRequest - status: ${response.status}, isRetry: ${isRetry}, originalModel: ${originalModel}, isEnabled: ${this.autoSwitchHelper.isEnabled()}, fallbackModel: ${fallbackForLog}`);
 			if (this.autoSwitchHelper.isRateLimitStatus(response.status) && !isRetry && originalModel) {
 				const fallbackModel = this.autoSwitchHelper.getFallbackModel(originalModel);
 				if (fallbackModel && this.autoSwitchHelper.isEnabled()) {
@@ -783,6 +790,7 @@ export class GeminiApiClient {
 			};
 		} catch (error: unknown) {
 			// Handle rate limiting for non-streaming requests
+			console.log(`[DEBUG] getCompletion - error: ${JSON.stringify(error)}, modelId: ${modelId}, isEnabled: ${this.autoSwitchHelper.isEnabled()}, fallbackModel: ${this.autoSwitchHelper.getFallbackModel(modelId)}`);
 			if (this.autoSwitchHelper.isRateLimitError(error)) {
 				const fallbackResult = await this.autoSwitchHelper.handleNonStreamingFallback(
 					modelId,
@@ -797,6 +805,303 @@ export class GeminiApiClient {
 			}
 
 			// Re-throw if not a rate limit error or fallback not available
+			throw error;
+		}
+	}
+
+	/**
+		* Stream content using a raw API key (used by KeyRotator providerStream).
+		* This reuses the same request format as streamContent but sends Authorization: Bearer <apiKey>
+		* and relies on GEMINI_PROJECT_ID (or the client's discovered project) to be available in env.
+		*/
+	async *streamContentWithApiKey(
+		apiKey: string,
+		modelId: string,
+		systemPrompt: string,
+		messages: ChatMessage[],
+		options?: {
+			includeReasoning?: boolean;
+			thinkingBudget?: number;
+			tools?: Tool[];
+			tool_choice?: ToolChoice;
+			max_tokens?: number;
+			temperature?: number;
+			top_p?: number;
+			stop?: string | string[];
+			presence_penalty?: number;
+			frequency_penalty?: number;
+			seed?: number;
+			response_format?: {
+				type: "text" | "json_object";
+			};
+		}
+	): AsyncGenerator<StreamChunk> {
+		// NOTE: This method intentionally avoids using this.authManager since we're using a raw apiKey.
+		// Project discovery requires a project id; prefer env var, then instance projectId.
+		const projectId = this.env.GEMINI_PROJECT_ID || this.projectId;
+		if (!projectId) {
+			throw new Error("GEMINI_PROJECT_ID is required when calling streamContentWithApiKey");
+		}
+
+		const contents = messages.map((msg) => this.messageToGeminiFormat(msg));
+
+		if (systemPrompt) {
+			contents.unshift({ role: "user", parts: [{ text: systemPrompt }] });
+		}
+
+		const isThinkingModel = geminiCliModels[modelId]?.thinking || false;
+		const isRealThinkingEnabled = this.env.ENABLE_REAL_THINKING === "true";
+		const isFakeThinkingEnabled = this.env.ENABLE_FAKE_THINKING === "true";
+		const streamThinkingAsContent = this.env.STREAM_THINKING_AS_CONTENT === "true";
+		const includeReasoning = options?.includeReasoning || false;
+
+		const req = {
+			thinking_budget: options?.thinkingBudget,
+			tools: options?.tools,
+			tool_choice: options?.tool_choice,
+			max_tokens: options?.max_tokens,
+			temperature: options?.temperature,
+			top_p: options?.top_p,
+			stop: options?.stop,
+			presence_penalty: options?.presence_penalty,
+			frequency_penalty: options?.frequency_penalty,
+			seed: options?.seed,
+			response_format: options?.response_format
+		};
+
+		const generationConfig = GenerationConfigValidator.createValidatedConfig(
+			modelId,
+			req,
+			isRealThinkingEnabled,
+			includeReasoning,
+			this.env
+		);
+
+		const { tools, toolConfig } = GenerationConfigValidator.createValidateTools(req);
+
+		let needsThinkingClose = false;
+		if (isThinkingModel && isFakeThinkingEnabled && !includeReasoning) {
+			yield* this.generateReasoningOutput(modelId, messages, streamThinkingAsContent);
+			needsThinkingClose = streamThinkingAsContent;
+		}
+
+		const streamRequest = {
+			model: modelId,
+			project: projectId,
+			request: {
+				contents: contents,
+				generationConfig,
+				tools: tools,
+				toolConfig
+			}
+		};
+
+		// Perform fetch to the stream endpoint with apiKey header
+		const response = await fetch(`${CODE_ASSIST_ENDPOINT}/${CODE_ASSIST_API_VERSION}:streamGenerateContent?alt=sse`, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				Authorization: `Bearer ${apiKey}`
+			},
+			body: JSON.stringify(streamRequest)
+		});
+
+		if (!response.ok) {
+			const errorText = await response.text();
+			console.error(`[GeminiAPI] streamGenerateContent failed with status ${response.status}`, errorText);
+			// Map common server-side rate-limit/401 behavior to the caller for rotation handling
+			throw Object.assign(new Error(`Stream request failed: ${response.status}`), { status: response.status, body: errorText });
+		}
+
+		if (!response.body) {
+			throw new Error("Response has no body");
+		}
+
+		this.callCount++; // optimistic increment for successful network response
+
+		let hasClosedThinking = false;
+		let hasStartedThinking = false;
+
+		for await (const jsonData of this.parseSSEStream(response.body)) {
+			const candidate = jsonData.response?.candidates?.[0];
+
+			if (candidate?.content?.parts) {
+				for (const part of candidate.content.parts as GeminiPart[]) {
+					// Reuse same chunk handling logic as performStreamRequest
+					if (part.thought === true && part.text) {
+						const thinkingText = part.text;
+
+						if (includeReasoning && streamThinkingAsContent) {
+							if (!hasStartedThinking) {
+								yield {
+									type: "thinking_content",
+									data: "<thinking>\n"
+								};
+								hasStartedThinking = true;
+							}
+
+							yield {
+								type: "thinking_content",
+								data: thinkingText
+							};
+						} else if (includeReasoning) {
+							yield {
+								type: "real_thinking",
+								data: thinkingText
+							};
+						} else {
+							// If reasoning not requested, skip thought parts
+						}
+					} else if (part.text && part.text.includes("<think>")) {
+						if (includeReasoning && streamThinkingAsContent) {
+							const thinkingMatch = part.text.match(/<think>(.*?)<\/think>/s);
+							if (thinkingMatch) {
+								if (!hasStartedThinking) {
+									yield {
+										type: "thinking_content",
+										data: "<thinking>\n"
+									};
+									hasStartedThinking = true;
+								}
+								yield {
+									type: "thinking_content",
+									data: thinkingMatch[1]
+								};
+							}
+
+							const nonThinkingContent = part.text.replace(/<think>.*?<\/think>/gs, "").trim();
+							if (nonThinkingContent) {
+								if (hasStartedThinking && !hasClosedThinking) {
+									yield {
+										type: "thinking_content",
+										data: "\n</thinking>\n\n"
+									};
+									hasClosedThinking = true;
+								}
+								yield { type: "text", data: nonThinkingContent };
+							}
+						} else if (includeReasoning) {
+							const thinkingMatch = part.text.match(/<think>(.*?)<\/think>/s);
+							if (thinkingMatch) {
+								yield {
+									type: "real_thinking",
+									data: thinkingMatch[1]
+								};
+							}
+							const nonThinkingContent = part.text.replace(/<think>.*?<\/think>/gs, "").trim();
+							if (nonThinkingContent) {
+								yield { type: "text", data: nonThinkingContent };
+							}
+						} else {
+							// No reasoning requested; stream as normal text
+							const nonThinkingContent = part.text.replace(/<think>.*?<\/think>/gs, "").trim();
+							if (nonThinkingContent) yield { type: "text", data: nonThinkingContent };
+						}
+					} else if (part.text && !part.thought && !part.text.includes("<think>")) {
+						if ((needsThinkingClose || (includeReasoning && hasStartedThinking)) && !hasClosedThinking) {
+							yield {
+								type: "thinking_content",
+								data: "\n</thinking>\n\n"
+							};
+							hasClosedThinking = true;
+						}
+
+						yield { type: "text", data: part.text };
+					} else if (part.functionCall) {
+						if ((needsThinkingClose || (includeReasoning && hasStartedThinking)) && !hasClosedThinking) {
+							yield {
+								type: "thinking_content",
+								data: "\n</thinking>\n\n"
+							};
+							hasClosedThinking = true;
+						}
+
+						const functionCallData: GeminiFunctionCall = {
+							name: part.functionCall.name,
+							args: part.functionCall.args
+						};
+
+						yield {
+							type: "tool_code",
+							data: functionCallData
+						};
+					}
+				}
+			}
+
+			if (jsonData.response?.usageMetadata) {
+				const usage = jsonData.response.usageMetadata;
+				const usageData: UsageData = {
+					inputTokens: usage.promptTokenCount || 0,
+					outputTokens: usage.candidatesTokenCount || 0
+				};
+				yield {
+					type: "usage",
+					data: usageData
+				};
+			}
+		}
+	}
+
+	/**
+		* Non-streaming completion using a raw API key (used by KeyRotator providerCall).
+		*/
+	async getCompletionWithApiKey(
+		apiKey: string,
+		modelId: string,
+		systemPrompt: string,
+		messages: ChatMessage[],
+		options?: {
+			includeReasoning?: boolean;
+			thinkingBudget?: number;
+			tools?: Tool[];
+			tool_choice?: ToolChoice;
+			max_tokens?: number;
+			temperature?: number;
+			top_p?: number;
+			stop?: string | string[];
+			presence_penalty?: number;
+			frequency_penalty?: number;
+			seed?: number;
+			response_format?: {
+				type: "text" | "json_object";
+			};
+		}
+	): Promise<{
+		content: string;
+		usage?: UsageData;
+		tool_calls?: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }>;
+	}> {
+		try {
+			let content = "";
+			let usage: UsageData | undefined;
+			const tool_calls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> = [];
+
+			for await (const chunk of this.streamContentWithApiKey(apiKey, modelId, systemPrompt, messages, options)) {
+				if (chunk.type === "text" && typeof chunk.data === "string") {
+					content += chunk.data;
+				} else if (chunk.type === "usage" && typeof chunk.data === "object") {
+					usage = chunk.data as UsageData;
+				} else if (chunk.type === "tool_code" && typeof chunk.data === "object") {
+					const toolData = chunk.data as GeminiFunctionCall;
+					tool_calls.push({
+						id: `call_${crypto.randomUUID()}`,
+						type: "function",
+						function: {
+							name: toolData.name,
+							arguments: JSON.stringify(toolData.args)
+						}
+					});
+				}
+			}
+
+			return {
+				content,
+				usage,
+				tool_calls: tool_calls.length > 0 ? tool_calls : undefined
+			};
+		} catch (error: unknown) {
+			// Bubble up for KeyRotator to inspect; preserve status if available
 			throw error;
 		}
 	}

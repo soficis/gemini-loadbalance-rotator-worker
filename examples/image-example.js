@@ -10,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 
 // Configuration
-const WORKER_URL = 'https://gemini-cli-worker.gewoonjaap.workers.dev/v1';
+const WORKER_URL = 'https://gemini-loadbalance-rotator-worker.your-domain.workers.dev/v1';
 const API_KEY = 'sk-your-secret-api-key-here'; // Replace with your API key if authentication is enabled
 
 async function encodeImageToBase64(imagePath) {

@@ -11,7 +11,8 @@ export const DebugRoute = new Hono<{ Bindings: Env }>();
 // Check KV cache status
 DebugRoute.get("/cache", async (c) => {
 	try {
-		const authManager = new AuthManager(c.env);
+		const credentialJson = (c.env.GCP_SERVICE_ACCOUNT as string) ?? "{}";
+		const authManager = new AuthManager(c.env, credentialJson, 0);
 		const cacheInfo = await authManager.getCachedTokenInfo();
 
 		// Remove sensitive information from the response
@@ -43,7 +44,8 @@ DebugRoute.get("/cache", async (c) => {
 DebugRoute.post("/token-test", async (c) => {
 	try {
 		console.log("Token test endpoint called");
-		const authManager = new AuthManager(c.env);
+		const credentialJson = (c.env.GCP_SERVICE_ACCOUNT as string) ?? "{}";
+		const authManager = new AuthManager(c.env, credentialJson, 0);
 
 		// Test authentication only
 		await authManager.initializeAuth();
@@ -71,7 +73,8 @@ DebugRoute.post("/token-test", async (c) => {
 DebugRoute.post("/test", async (c) => {
 	try {
 		console.log("Test endpoint called");
-		const authManager = new AuthManager(c.env);
+		const credentialJson = (c.env.GCP_SERVICE_ACCOUNT as string) ?? "{}";
+		const authManager = new AuthManager(c.env, credentialJson, 0);
 		const geminiClient = new GeminiApiClient(c.env, authManager);
 
 		// Test authentication

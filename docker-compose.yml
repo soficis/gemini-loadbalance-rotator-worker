@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
       args:
         NODE_ENV: development
-    container_name: gemini-cli-worker
+  container_name: gemini-loadbalance-rotator-worker
     ports:
       - "8787:8787"  # Host:Container port mapping
     volumes:

@@ -16,7 +16,12 @@ export class AutoModelSwitchingHelper {
 	 * Checks if auto model switching is enabled via environment variable.
 	 */
 	isEnabled(): boolean {
-		return this.env.ENABLE_AUTO_MODEL_SWITCHING === "true";
+		// Enabled by default. Only disable if the environment variable is explicitly set to
+		// a falsy value such as the boolean false or the string "false" (case-insensitive).
+		const val = this.env.ENABLE_AUTO_MODEL_SWITCHING as unknown as string | boolean | undefined;
+		if (val === false) return false;
+		if (typeof val === "string" && val.toLowerCase() === "false") return false;
+		return true;
 	}
 
 	/**

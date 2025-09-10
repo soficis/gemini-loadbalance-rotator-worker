@@ -1,124 +1,82 @@
-# 🚀 Gemini CLI OpenAI Worker with Load Blancing
+# gemini-loadbalance-rotator-worker
 
-## Acknowledgements
+Public repository: https://github.com/soficis/gemini-loadbalance-rotator-worker
 
-This project is based on [gemini-cli-openai](https://github.com/GewoonJaap/gemini-cli-openai). Special thanks to the original author!
+This repository is a fork and enhancement of upstream projects that expose OpenAI-compatible endpoints while proxying requests to Google's Gemini models. The primary addition in this fork is robust OAuth credential rotation (multiple per-key OAuth JSON credentials) and operational improvements for production use.
 
-## Overview
+Acknowledgements
+- Based on and inspired by:
+    - https://github.com/kevinyuan/gemini-loadbalance-worker — thank you Kevin Yuan for the load-balance design.
+    - https://github.com/GewoonJaap/gemini-cli-openai — thank you for the core OpenAI-compatibility approach.
 
-This project has been enhanced with the following features:
+Main additions in this fork
+- Per-key OAuth rotation (store multiple `GEMINI_API_KEY_n` secrets where each value is a full OAuth credential JSON).
+- KV-backed token cache and per-key cooldown/invalidations on repeated errors.
+- Automatic model fallback (e.g. `gemini-2.5-pro` → `gemini-2.5-flash`) is enabled by default and works seamlessly with key rotation; set `ENABLE_AUTO_MODEL_SWITCHING` to "false" to opt-out.
 
-- **Multi-Key Load Balancing**: Supports using multiple Gemini API keys via a round-robin load balancing mechanism.
-- **Per-Client Project ID**: Allows individual Gemini API clients to be configured with their own Google Cloud Project IDs.
-- **Fault Tolerance**: Implements an error tracking system for each client. Clients exceeding a configurable error threshold are temporarily marked as invalid and skipped during load balancing. Invalid clients are automatically re-enabled after a one-hour cooldown period.
-- **Environment Variable Storage for API Keys**: To enhance security, API keys are stored as individual secrets in environment variables.
+Quick start (noob-friendly)
 
-## 🛠️ Setup
+1) Clone the repo and install dependencies
 
-### Prerequisites
+```powershell
+git clone https://github.com/soficis/gemini-loadbalance-rotator-worker.git
+cd gemini-loadbalance-rotator-worker
+npm install
+```
 
-1.  **Google Account** with access to Gemini
-2.  **Cloudflare Account** with Workers enabled
-3.  **Wrangler CLI** installed (`npm install -g wrangler`)
+2) Prepare your Gemini OAuth credential JSON files
 
-### Step 1: Get OAuth2 Credentials
+Each credential must be the full OAuth JSON object you get from the Gemini CLI (or Google Cloud OAuth flow). Example fields include: `access_token`, `refresh_token`, `expiry_date`, and `project_id`.
 
-You need OAuth2 credentials from a Google account that has accessed Gemini. The easiest way to get these is through the official Gemini CLI.
+- Recommended local layout: create a folder named `oauth creds/` (this folder is in `.gitignore`). Place one JSON file per credential, e.g. `oauth_creds.json`, `random1-oauth_creds.json`, etc.
 
-#### Using Gemini CLI
+3) Upload credentials as Cloudflare secrets (production)
 
-1.  **Install Gemini CLI**:
-    ```bash
-    npm install -g @google/gemini-cli
-    ```
+Use `wrangler secret put` to upload each file as `GEMINI_API_KEY_1`, `GEMINI_API_KEY_2`, etc. Example (PowerShell):
 
-2.  **Start the Gemini CLI**:
-    ```bash
-    gemini
-    ```
-3.  **Authenticate with Google**:
+```powershell
+Get-Content -Raw "./oauth creds/oauth_creds.json" | wrangler secret put GEMINI_API_KEY_1
+Get-Content -Raw "./oauth creds/random1-oauth_creds.json" | wrangler secret put GEMINI_API_KEY_2
+```
 
-    Select `● Login with Google`.
+4) Optional: import local `.dev.vars` for development
 
-    A browser window will now open prompting you to login with your Google account.
+You can use the included `scripts/import-keys.js` to bulk-import a `.dev.vars` file for local dev. See `USAGE.md` for a step-by-step guide.
 
-4.  **Locate the credentials file**:
+5) Run locally (PowerShell)
 
-    **Windows:**
-    ```
-    C:\Users\USERNAME\.gemini\oauth_creds.json
-    ```
+```powershell
+node ./scripts/import-keys.js; Get-Content .dev.vars | ForEach-Object { if ($_ -match "^([^=]+)=(.*)$") { $n=$matches[1]; $v=$matches[2].Trim("'\""); Set-Item -Path Env:$n -Value $v } }; npm run dev
+```
 
-    **macOS/Linux:**
-    ```
-    ~/.gemini/oauth_creds.json
-    ```
+6) Deploy to Cloudflare
 
-5.  **Copy the credentials**:
-    The file contains JSON in this format:
-    ```json
-    {
-      "access_token": "ya29....",
-      "refresh_token": "1//0...",
-      "scope": "https://www.googleapis.com/auth/cloud-platform ...",
-      "token_type": "Bearer",
-      "id_token": "eyJ...",
-      "expiry_date": 175...
-    }
-    ```
-
-### Step 2: Environment Setup
-
-The setup process differs for local development and remote deployment.
-
-#### For Local Development (`npm run dev`)
-
-1.  **Create a `.dev.vars` file**: This file will store your credentials for local testing.
-2.  **Add your keys to `.dev.vars`**: Each key must be a single-line JSON string. The variable name must start with `GEMINI_API_KEY_`.
-    ```bash
-    # .dev.vars
-    GEMINI_API_KEY_1='{"access_token": "...", "refresh_token": "...", "scope": "...", "token_type": "Bearer", "id_token": "...", "expiry_date": 1750927763467, "project_id": "your-project-id-1"}'
-    GEMINI_API_KEY_2='{"access_token": "...", "refresh_token": "...", "scope": "...", "token_type": "Bearer", "id_token": "...", "expiry_date": 1750927763467, "project_id": "your-project-id-2"}'
-
-    # Optional: Other variables
-    OPENAI_API_KEY=sk-your-secret-api-key-here
-    MAX_ERROR_COUNT=5
-    ```
-
-#### For Remote Deployment (`npm run deploy`)
-
-1.  **Set each key as a secret**: For each credential, use the `wrangler secret put` command. The secret name must start with `GEMINI_API_KEY_`.
-    - **Format the credential**: The JSON content needs to be passed as a single-line string. You can prepare this manually or use a tool like `jq`:
-      ```bash
-      cat oauth_creds.json | jq -c .
-      ```
-    - **Set the secret**:
-      ```bash
-      # Set the first key
-      wrangler secret put GEMINI_API_KEY_1
-      # Paste the single-line JSON credential when prompted
-
-      # Set the second key
-      wrangler secret put GEMINI_API_KEY_2
-      # Paste the second single-line JSON credential when prompted
-
-      # ... and so on for all your keys
-      ```
-2.  **Set other optional secrets**:
-    ```bash
-    wrangler secret put OPENAI_API_KEY  # Optional, only if you want authentication
-    wrangler secret put GEMINI_PROJECT_ID # Optional
-    wrangler secret put MAX_ERROR_COUNT # Optional
-    ```
-
-### Step 3: Deploy
+Ensure `wrangler.toml` has a KV namespace entry for `GEMINI_CLI_LOADBALANCE` (used by token cache and rotator state), then:
 
 ```bash
-# Install dependencies
-npm install
-
-# Deploy to Cloudflare Workers
+npm run build
 npm run deploy
+```
 
-# Or run locally for development
-npm run dev
+Detailed differences vs upstream
+
+- Upstream `gemini-cli-openai` focused on a single credential and compatibility layer. This fork adds multi-key rotation and operational state in KV.
+- Upstream `gemini-loadbalance-worker` (Kevin Yuan) provided load-balancing ideas; this fork makes rotation safer for OAuth credentials and provides per-key project IDs and cooldowns.
+
+How to obtain Gemini OAuth credential JSONs
+
+1) Use the Gemini CLI or Google Cloud console to create an OAuth client and obtain credentials.
+2) Authorize the client to access the Cloud Code / Gemini APIs and capture the JSON credential (access_token, refresh_token, expiry_date, project_id).
+3) Save the JSON object as a file and upload with `wrangler secret put`.
+
+See `USAGE.md` for detailed step-by-step instructions and troubleshooting tips for newcomers.
+
+Security
+- Do not commit OAuth JSON files or `.dev.vars`. These are added in `.gitignore`.
+- Use `wrangler secret put` for production credentials and rotate them regularly.
+
+Publishing checklist
+- Ensure `.gitignore` includes any local credential files and logs (it does).
+- Remove any temporary debug logging and run `npm run lint` and `npx tsc --noEmit` before publishing.
+
+If you want an expanded publish-ready README with diagrams or templates, tell me which sections to expand.

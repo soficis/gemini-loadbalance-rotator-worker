@@ -15,7 +15,7 @@ export interface Env {
 	ENABLE_FAKE_THINKING?: string; // Optional flag to enable fake thinking output (set to "true" to enable)
 	ENABLE_REAL_THINKING?: string; // Optional flag to enable real Gemini thinking output (set to "true" to enable)
 	STREAM_THINKING_AS_CONTENT?: string; // Optional flag to stream thinking as content with <thinking> tags (set to "true" to enable)
-	ENABLE_AUTO_MODEL_SWITCHING?: string; // Optional flag to enable automatic fallback from pro to flash on 429 errors (set to "true" to enable)
+	ENABLE_AUTO_MODEL_SWITCHING?: string; // Optional flag to control automatic fallback from pro to flash. Enabled by default; set to the string "false" or boolean false to disable.
 	MAX_ERROR_COUNT?: string; // Optional: Max error count for a client before it's marked invalid (default 3)
 	GEMINI_MODERATION_HARASSMENT_THRESHOLD?: SafetyThreshold;
 	GEMINI_MODERATION_HATE_SPEECH_THRESHOLD?: SafetyThreshold;

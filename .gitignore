@@ -136,3 +136,14 @@ dist
 .pnp.*
 .dev.vars
 .wrangler/
+
+# Secrets / local keys (added by import-keys script)
+gemini_key_rotator_v16/keys.txt
+.dev.vars
+"oauth creds"/
+oauth\ creds/
+.wrangler-logs/
+secrets.json
+keys.txt
+temp_credential.json
+.roomodes

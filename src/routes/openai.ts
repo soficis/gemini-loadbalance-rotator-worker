@@ -1,12 +1,14 @@
 import { Hono } from "hono";
 import { Env, ChatCompletionRequest, ChatCompletionResponse } from "../types";
 import { geminiCliModels, DEFAULT_MODEL, getAllModelIds } from "../models";
-import { OPENAI_MODEL_OWNER } from "../config";
+import { OPENAI_MODEL_OWNER, CODE_ASSIST_ENDPOINT, CODE_ASSIST_API_VERSION } from "../config";
 import { DEFAULT_THINKING_BUDGET } from "../constants";
 // REMOVED: import { AuthManager } from "../auth";
 // REMOVED: import { GeminiApiClient } from "../gemini-client";
 import { initializeClientPool, getNextClient, getClientStatuses } from "../client-pool"; // ADDED
 import { createOpenAIStreamTransformer } from "../stream-transformer";
+import KeyManager from "../key-manager";
+import KeyRotator from "../key-rotator";
 
 /**
  * OpenAI-compatible API routes for models and chat completions.
@@ -148,8 +150,32 @@ OpenAIRoute.post("/chat/completions", async (c) => {
 		} catch (err) {
 			return c.json({ error: (err as Error).message }, 500);
 		}
-
-		// Get the next client from the pool
+	
+		// Optionally initialize KeyManager/KeyRotator if GEMINI_KEYS or GEMINI_KEYS_FILE is provided
+		let keyRotator: KeyRotator | null = null;
+		try {
+			const envKeys = c.env.GEMINI_KEYS as string | undefined;
+			const keysFile = c.env.GEMINI_KEYS_FILE as string | undefined;
+			if (envKeys || keysFile) {
+				const km = new KeyManager({ kv: c.env.GEMINI_CLI_LOADBALANCE, kvKey: "gemini_key_rotator:cooldown_data_v1" });
+				if (envKeys) {
+					const keys = envKeys.split(",").map((s) => s.trim()).filter(Boolean);
+					if (keys.length) km.setKeys(keys);
+				}
+				if (keysFile) {
+					// loadKeysFromFile is async and will populate keys; await it to ensure availability
+					await km.loadKeysFromFile(keysFile);
+				}
+				keyRotator = new KeyRotator(km);
+				console.log("Initialized KeyRotator with", (km as any).keys?.length ?? km.getTotalKeysCount(), "keys");
+			}
+		} catch (krErr) {
+			console.error("Failed to initialize KeyRotator:", krErr);
+			// proceed without rotator
+			keyRotator = null;
+		}
+	
+		// Get the next client from the pool (fallback for when KeyRotator is not configured)
 		const geminiClient = getNextClient();
 
 		if (stream) {
@@ -163,13 +189,35 @@ OpenAIRoute.post("/chat/completions", async (c) => {
 			(async () => {
 				try {
 					console.log("Starting stream generation");
-					const geminiStream = geminiClient.streamContent(model, systemPrompt, otherMessages, {
-						includeReasoning,
-						thinkingBudget,
-						tools,
-						tool_choice,
-						...generationOptions
-					});
+					let geminiStream;
+					if (keyRotator) {
+						// Use KeyRotator's streaming-aware rotation and delegate actual network calls
+						geminiStream = keyRotator.streamContent(
+							model,
+							systemPrompt,
+							otherMessages,
+							(apiKey, _model, _systemPrompt, _messages, _options) =>
+								// Delegate to a pool client to perform the request using the raw apiKey
+								// Note: getNextClient() is safe because the pool is initialized above.
+								// We bind the call so it returns the AsyncGenerator expected by KeyRotator.
+								geminiClient.streamContentWithApiKey(apiKey, _model, _systemPrompt as string, _messages as any[], _options),
+							{
+								includeReasoning,
+								thinkingBudget,
+								tools,
+								tool_choice,
+								...generationOptions
+							}
+						);
+					} else {
+						geminiStream = geminiClient.streamContent(model, systemPrompt, otherMessages, {
+							includeReasoning,
+							thinkingBudget,
+							tools,
+							tool_choice,
+							...generationOptions
+						});
+					}
 
 					for await (const chunk of geminiStream) {
 						await writer.write(chunk);
@@ -204,14 +252,42 @@ OpenAIRoute.post("/chat/completions", async (c) => {
 			// Non-streaming response
 			try {
 				console.log("Starting non-streaming completion");
-				const completion = await geminiClient.getCompletion(model, systemPrompt, otherMessages, {
-					includeReasoning,
-					thinkingBudget,
-					tools,
-					tool_choice,
-					...generationOptions
-				});
-
+	
+				let completion;
+	
+				if (keyRotator) {
+					// Minimal providerCall that delegates to the existing gemini client.
+					// Note: providerCall receives an apiKey but this minimal implementation
+					// uses the configured client pool (geminiClient) to perform the request.
+					const providerCall = async (
+						apiKey: string,
+						_model: string,
+						_systemPrompt: string,
+						_messages: unknown[],
+						_options?: Record<string, unknown>
+					) => {
+						// Use the raw API key path on the Gemini client so KeyRotator can rotate across keys.
+						// This calls the client method that accepts a raw apiKey and performs the network request.
+						return await geminiClient.getCompletionWithApiKey(apiKey, _model, _systemPrompt as string, _messages as any[], _options as any);
+					};
+	
+					completion = await keyRotator.generateContent(model, systemPrompt, otherMessages, providerCall, {
+						includeReasoning,
+						thinkingBudget,
+						tools,
+						tool_choice,
+						...generationOptions
+					});
+				} else {
+					completion = await geminiClient.getCompletion(model, systemPrompt, otherMessages, {
+						includeReasoning,
+						thinkingBudget,
+						tools,
+						tool_choice,
+						...generationOptions
+					});
+				}
+	
 				const response: ChatCompletionResponse = {
 					id: `chatcmpl-${crypto.randomUUID()}`,
 					object: "chat.completion",
@@ -229,16 +305,18 @@ OpenAIRoute.post("/chat/completions", async (c) => {
 						}
 					]
 				};
-
-				// Add usage information if available
+	
+				// Add usage information if available (guard optional fields)
 				if (completion.usage) {
+					const inputTokens = completion.usage.inputTokens ?? 0;
+					const outputTokens = completion.usage.outputTokens ?? 0;
 					response.usage = {
-						prompt_tokens: completion.usage.inputTokens,
-						completion_tokens: completion.usage.outputTokens,
-						total_tokens: completion.usage.inputTokens + completion.usage.outputTokens
+						prompt_tokens: inputTokens,
+						completion_tokens: outputTokens,
+						total_tokens: inputTokens + outputTokens
 					};
 				}
-
+	
 				console.log("Non-streaming completion successful");
 				return c.json(response);
 			} catch (completionError: unknown) {

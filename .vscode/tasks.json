@@ -1,0 +1,25 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Import Gemini keys & Run Dev (bash)",
+      "type": "shell",
+      "command": "node ./scripts/import-keys.js && export $(cat .dev.vars | xargs) && npm run dev",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Import Gemini keys & Run Dev (PowerShell)",
+      "type": "shell",
+      "command": "node ./scripts/import-keys.js; Get-Content .dev.vars | ForEach-Object { if ($_ -match \"^([^=]+)=(.*)$\") { $n=$matches[1]; $v=$matches[2].Trim(\"'\\\"\"); Set-Item -Path Env:$n -Value $v } }; npm run dev",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    }
+  ]
+}
