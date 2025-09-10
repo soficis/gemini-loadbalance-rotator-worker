@@ -6,6 +6,8 @@
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "import-keys": "node ./scripts/import-keys.js",
+  "push-secrets": "node ./scripts/push-oauth-secrets.js",
+  "push-secrets:run": "node ./scripts/push-oauth-secrets.js --run",
     "import-keys:wrangler": "node ./scripts/import-keys.js --wrangler",
     "test:auth": "node ./scripts/test-auth-mock.js",
     "format": "prettier --write src",

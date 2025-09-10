@@ -1,16 +1,16 @@
 import { KeyManager } from "./key-manager";
- 
+
 // Flexible options bag accepted by provider calls
 export interface GenerateOptions {
   [key: string]: any;
 }
- 
+
 export type ProviderCallResult = {
   content: string;
   usage?: { inputTokens?: number; outputTokens?: number } | undefined;
   tool_calls?: Array<any> | undefined;
 };
- 
+
 export type ProviderCall = (
   apiKey: string,
   model: string,
@@ -18,12 +18,14 @@ export type ProviderCall = (
   messages: unknown[],
   options?: any
 ) => Promise<ProviderCallResult>;
- 
+
 export interface KeyRotatorOptions {
   maxRetriesPerKeyMultiplier?: number; // default 2
   perKeyCooldownSeconds?: number;
 }
- 
+
+const MODEL_TIERS = ["gemini-2.5-pro", "gemini-2.5-flash"];
+
 export class KeyRotator {
   private keyManager: KeyManager;
   private maxRetriesPerKeyMultiplier: number;
@@ -57,51 +59,48 @@ export class KeyRotator {
     providerCall: ProviderCall,
     options?: GenerateOptions
   ): Promise<ProviderCallResult> {
-    const totalKeys = this.keyManager.getTotalKeysCount();
-    const maxRetries = Math.max(1, totalKeys * this.maxRetriesPerKeyMultiplier);
+    const startTier = MODEL_TIERS.indexOf(model) !== -1 ? MODEL_TIERS.indexOf(model) : 0;
 
-    const triedKeys = new Set<string>();
+    // Iterate models from preferred (startTier) to fallback models.
+    for (let i = startTier; i < MODEL_TIERS.length; i++) {
+      const currentModel = MODEL_TIERS[i];
+      // Snapshot available keys for this attempt; KeyManager manages exhaustion state.
+      const availableKeys = this.keyManager.getAvailableKeys();
+      if (!availableKeys || availableKeys.length === 0) continue;
 
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      // pick available keys not tried yet
-      // (KeyManager intentionally masks keys in its snapshot; access raw keys as a pragmatic bridge)
-      const rawKeys: string[] = (this.keyManager as any).keys ?? [];
+      const triedKeys = new Set<string>();
 
-      const candidates = rawKeys.filter((k) => {
-        if (triedKeys.has(k)) return false;
-        return this.keyManager.isKeyAvailable(k);
-      });
-
-      if (candidates.length === 0) {
-        // nothing new to try; maybe all keys exhausted
-        break;
-      }
-
-      const key = candidates[Math.floor(Math.random() * candidates.length)];
-      triedKeys.add(key);
-
-      try {
-        const result = await providerCall(key, model, systemPrompt, messages, options);
-        return result;
-      } catch (err) {
-        if (this.isRecoverableError(err)) {
-          // mark key exhausted and continue to next
-          await this.keyManager.markKeyExhausted(key, model, this.perKeyCooldownSeconds);
-          // brief backoff before retrying
-          await this.wait(100);
+      // Try each available key once for the current model before falling back to next model
+      for (let k = 0; k < availableKeys.length; k++) {
+        const key = this.keyManager.getNextAvailableKey();
+        if (!key || triedKeys.has(key)) {
+          // If we've tried all known available keys, break
+          if (triedKeys.size >= availableKeys.length) break;
           continue;
         }
-        // non-recoverable -> rethrow
-        throw err;
+
+        triedKeys.add(key);
+
+        try {
+          console.log(`Attempting to use key ${this.keyManager.maskKey(key)} for model ${currentModel}`);
+          const result = await providerCall(key, currentModel, systemPrompt, messages, options);
+          return result;
+        } catch (err) {
+          if (this.isRecoverableError(err)) {
+            console.log(`Key ${this.keyManager.maskKey(key)} failed for model ${currentModel}, marking as exhausted.`);
+            await this.keyManager.markKeyExhausted(key, currentModel, this.perKeyCooldownSeconds);
+            await this.wait(100);
+            continue;
+          }
+          throw err;
+        }
       }
+      // No keys in this model succeeded; move to next model tier
     }
 
     throw new Error("No available API keys or all attempts failed");
   }
 
-  // Streaming-aware rotation: accepts a providerStream that returns an AsyncGenerator of chunks.
-  // The providerStream receives the apiKey but this minimal bridge delegates to the existing pool-managed client.
-  // providerStream signature: (apiKey, model, systemPrompt, messages, options) => AsyncGenerator<unknown>
   async *streamContent(
     model: string,
     systemPrompt: string,
@@ -115,40 +114,41 @@ export class KeyRotator {
     ) => AsyncGenerator<any>,
     options?: GenerateOptions
   ): AsyncGenerator<any> {
-    const totalKeys = this.keyManager.getTotalKeysCount();
-    const maxRetries = Math.max(1, totalKeys * this.maxRetriesPerKeyMultiplier);
+    const startTier = MODEL_TIERS.indexOf(model) !== -1 ? MODEL_TIERS.indexOf(model) : 0;
+
+  for (let i = startTier; i < MODEL_TIERS.length; i++) {
+    const currentModel = MODEL_TIERS[i];
+    const availableKeys = this.keyManager.getAvailableKeys();
+    if (!availableKeys || availableKeys.length === 0) continue;
+
     const triedKeys = new Set<string>();
 
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      const rawKeys: string[] = (this.keyManager as any).keys ?? [];
-
-      const candidates = rawKeys.filter((k) => {
-        if (triedKeys.has(k)) return false;
-        return this.keyManager.isKeyAvailable(k);
-      });
-
-      if (candidates.length === 0) {
-        break;
+    for (let k = 0; k < availableKeys.length; k++) {
+      const key = this.keyManager.getNextAvailableKey();
+      if (!key || triedKeys.has(key)) {
+        if (triedKeys.size >= availableKeys.length) break;
+        continue;
       }
 
-      const key = candidates[Math.floor(Math.random() * candidates.length)];
       triedKeys.add(key);
 
       try {
-        for await (const chunk of providerStream(key, model, systemPrompt, messages, options)) {
+        console.log(`Attempting to use key ${this.keyManager.maskKey(key)} for model ${currentModel} (stream)`);
+        for await (const chunk of providerStream(key, currentModel, systemPrompt, messages, options)) {
           yield chunk;
         }
-        // Completed successfully for this key
         return;
       } catch (err) {
         if (this.isRecoverableError(err)) {
-          await this.keyManager.markKeyExhausted(key, model, this.perKeyCooldownSeconds);
+          console.log(`Key ${this.keyManager.maskKey(key)} failed for model ${currentModel} (stream), marking as exhausted.`);
+          await this.keyManager.markKeyExhausted(key, currentModel, this.perKeyCooldownSeconds);
           await this.wait(100);
           continue;
         }
         throw err;
       }
     }
+  }
 
     throw new Error("No available API keys or all attempts failed (stream)");
   }

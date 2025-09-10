@@ -37,6 +37,30 @@ Use `wrangler secret put` to upload each file as `GEMINI_API_KEY_1`, `GEMINI_API
 ```powershell
 Get-Content -Raw "./oauth creds/oauth_creds.json" | wrangler secret put GEMINI_API_KEY_1
 Get-Content -Raw "./oauth creds/random1-oauth_creds.json" | wrangler secret put GEMINI_API_KEY_2
+
+Automated helper: push-oauth-secrets script
+-----------------------------------------
+
+This repository includes `scripts/push-oauth-secrets.js` which automates pushing all JSON files under `oauth creds/` to sequential Cloudflare secrets named `GEMINI_API_KEY_1`, `GEMINI_API_KEY_2`, etc.
+
+- Dry-run (safe):
+
+```powershell
+npm run push-secrets
+```
+
+- Execute (actually pushes secrets):
+
+```powershell
+npm run push-secrets:run
+```
+
+Security reminder
+-----------------
+
+- Ensure `oauth creds/` remains gitignored and do not commit per-credential JSON files.
+- If you used the local `.dev.vars` during development, delete it before publishing and remove it from git history if it was committed.
+- Prefer Cloudflare secrets (`wrangler secret put`) over embedding secrets in `wrangler.toml`.
 ```
 
 4) Optional: import local `.dev.vars` for development

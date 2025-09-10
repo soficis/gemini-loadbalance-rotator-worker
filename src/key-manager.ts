@@ -114,6 +114,16 @@ export class KeyManager {
     return available[idx];
   }
 
+  getAvailableKeys(): string[] {
+    const now = Date.now();
+    return this.keys.filter((k) => {
+      const rec = this.keyStatus[k];
+      if (!rec) return true;
+      if (!rec.exhaustedUntil) return true;
+      return rec.exhaustedUntil <= now;
+    });
+  }
+
   async markKeyExhausted(key: string, model?: string, cooldownSeconds?: number): Promise<void> {
     if (!this.keys.includes(key)) this.keys.push(key);
     const ms = (cooldownSeconds ?? Math.round(this.tierCooldownMs / 1000)) * 1000;
