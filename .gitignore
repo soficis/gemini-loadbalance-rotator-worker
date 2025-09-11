@@ -136,6 +136,7 @@ dist
 .pnp.*
 .dev.vars
 .wrangler/
+wrangler.toml
 
 # Secrets / local keys (added by import-keys script)
 gemini_key_rotator_v16/keys.txt
