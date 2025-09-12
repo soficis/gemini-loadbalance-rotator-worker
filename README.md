@@ -1,8 +1,29 @@
 # gemini-loadbalance-rotator-worker
 
-Public repository: https://github.com/soficis/gemini-loadbalance-rotator-worker
+This repository is a fork and enhancement of upstream projects that expose OpenAI-compatible endpoints while proxying requests to Google's Gemini models.
 
-This repository is a fork and enhancement of upstream projects that expose OpenAI-compatible endpoints while proxying requests to Google's Gemini models. The primary addition in this fork is robust OAuth credential rotation (multiple per-key OAuth JSON credentials) and operational improvements for production use.
+## ⚠️ IMPORTANT NOTICE
+
+**This project has been superseded by [Gemini-CLI-Proxy](https://github.com/soficis/gemini-cli-proxy)**
+
+Gemini-CLI-Proxy is a new and improved partial rewrite of this application with significant enhancements including:
+- Modern user setup wizard for easier onboarding
+- Improved credential management and security features
+- Enhanced performance and reliability
+- Better error handling and logging
+- Updated documentation and support
+
+**I strongly recommend using Gemini-CLI-Proxy instead of this repository for new deployments.**
+
+## ⚠️ LEGAL DISCLAIMER
+
+**Using this software may violate Google's Terms of Service.** This project is provided for educational and research purposes only. The author is not responsible for any consequences resulting from the use of this software, including but not limited to:
+- Account suspension or termination by Google
+- Legal action from Google or other parties
+- Data loss or security breaches
+- Any other damages or liabilities
+
+**Use at your own risk. You are solely responsible for ensuring your usage complies with all applicable terms of service and laws.**
 
 Acknowledgements
 - Based on and inspired by:
@@ -14,7 +35,7 @@ Main additions in this fork
 - KV-backed token cache and per-key cooldown/invalidations on repeated errors.
 - Automatic model fallback (e.g. `gemini-2.5-pro` → `gemini-2.5-flash`) is enabled by default and works seamlessly with key rotation; set `ENABLE_AUTO_MODEL_SWITCHING` to "false" to opt-out.
 
-Quick start (noob-friendly)
+Quick start
 
 1) Clone the repo and install dependencies
 
@@ -102,5 +123,3 @@ Security
 Publishing checklist
 - Ensure `.gitignore` includes any local credential files and logs (it does).
 - Remove any temporary debug logging and run `npm run lint` and `npx tsc --noEmit` before publishing.
-
-If you want an expanded publish-ready README with diagrams or templates, tell me which sections to expand.
